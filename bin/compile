@@ -10,6 +10,7 @@ unset GIT_DIR     # Avoid GIT_DIR leak from previous build steps
 ### Constants
 
 DEFAULT_CACHE="node_modules bower_components"
+DEFAULT_UNSIGNED_CACHE=""
 BPLOG_PREFIX="buildpack.nodejs"
 
 ### Configure directories
@@ -30,6 +31,7 @@ source $BP_DIR/lib/failure.sh
 source $BP_DIR/lib/environment.sh
 source $BP_DIR/lib/binaries.sh
 source $BP_DIR/lib/cache.sh
+source $BP_DIR/lib/unsigned-cache.sh
 source $BP_DIR/lib/dependencies.sh
 
 export PATH="$BUILD_DIR/.heroku/node/bin:$BUILD_DIR/.heroku/yarn/bin":$PATH
@@ -166,6 +168,28 @@ restore_cache() {
 header "Restoring cache"
 restore_cache | output "$LOG_FILE"
 
+restore_unsigned_cache() {
+  local cache_status="$(get_unsigned_cache_status)"
+
+  if [ "$cache_status" == "valid" ]; then
+    local cache_directories=$(get_unsigned_cache_directories)
+    if [ "$cache_directories" == "" ]; then
+      echo "Loading $(echo $DEFAULT_UNSIGNED_CACHE | wc -w | xargs) from unsignedCacheDirectories (default):"
+      restore_unsigned_cache_directories "$BUILD_DIR" "$CACHE_DIR" "$DEFAULT_UNSIGNED_CACHE"
+    else
+      echo "Loading $(echo $cache_directories | wc -w | xargs) from unsignedCacheDirectories (package.json):"
+      restore_unsigned_cache_directories "$BUILD_DIR" "$CACHE_DIR" $cache_directories
+    fi
+  else
+    echo "Skipping unsigned cache restore ($cache_status)"
+  fi
+
+  mcount "unsigned-cache.$cache_status"
+}
+
+header "Restoring unsigned cache"
+restore_unsigned_cache | output "$LOG_FILE"
+
 build_dependencies() {
   run_if_present 'heroku-prebuild'
 
@@ -210,6 +234,25 @@ cache_build() {
 
 header "Caching build"
 cache_build | output "$LOG_FILE"
+
+cache_build_unsigned() {
+  local cache_directories=$(get_unsigned_cache_directories)
+
+  echo "Clearing previous unsigned node cache"
+  clear_unsigned_cache
+  if ! ${NODE_MODULES_CACHE:-true}; then
+    echo "Skipping unsigned cache save (disabled by config)"
+  elif [ "$cache_directories" == "" ]; then
+    echo "Saving $(echo $DEFAULT_CACHE | wc -w | xargs) unsignedCacheDirectories (default):"
+    save_unsigned_cache_directories "$BUILD_DIR" "$CACHE_DIR" "$DEFAULT_CACHE"
+  else
+    echo "Saving $(echo $cache_directories | wc -w | xargs) unsignedCacheDirectories (package.json):"
+    save_unsigned_cache_directories "$BUILD_DIR" "$CACHE_DIR" $cache_directories
+  fi
+}
+
+header "Caching build's unsigned resources"
+cache_build_unsigned | output "$LOG_FILE"
 
 prune_devdependencies() {
   if $YARN; then
